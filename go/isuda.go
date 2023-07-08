@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/Songmu/strrand"
+	"github.com/felixge/fgprof"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
@@ -421,6 +422,11 @@ func getSession(w http.ResponseWriter, r *http.Request) *sessions.Session {
 }
 
 func main() {
+	http.DefaultServeMux.Handle("/debug/fgprof", fgprof.Handler())
+	go func() {
+		log.Println(http.ListenAndServe(":6061", nil))
+	}()
+
 	host := os.Getenv("ISUDA_DB_HOST")
 	if host == "" {
 		host = "localhost"
