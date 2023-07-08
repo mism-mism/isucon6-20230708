@@ -308,7 +308,7 @@ func htmlify(w http.ResponseWriter, r *http.Request, content string) string {
 		return ""
 	}
 	rows, err := db.Query(`
-		SELECT id, keyword, description, author_id, updated_at, created_at FROM entry ORDER BY keyword_length DESC limit 500
+		SELECT id, keyword, description, author_id, updated_at, created_at FROM entry ORDER BY CHARACTER_LENGTH(keyword) DESC
 	`)
 	panicIf(err)
 	entries := make([]*Entry, 0, 500)
