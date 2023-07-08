@@ -7,6 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Songmu/strrand"
+	"github.com/felixge/fgprof"
+	_ "github.com/go-sql-driver/mysql"
+	"github.com/gorilla/mux"
+	"github.com/gorilla/sessions"
+	"github.com/unrolled/render"
 	"html"
 	"html/template"
 	"log"
@@ -14,15 +20,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/Songmu/strrand"
-	"github.com/felixge/fgprof"
-	_ "github.com/go-sql-driver/mysql"
-	"github.com/gorilla/mux"
-	"github.com/gorilla/sessions"
-	"github.com/unrolled/render"
+	"sync"
+	"unicode/utf8"
 )
 
 const (
@@ -68,6 +70,35 @@ func authenticate(w http.ResponseWriter, r *http.Request) error {
 	return errInvalidUser
 }
 
+type Keyword struct {
+	key    string
+	link   string
+	holder string
+}
+
+type keywords []Keyword
+
+func (k keywords) Len() int {
+	return len(k)
+}
+
+func (k keywords) Less(i, j int) bool {
+	return utf8.RuneCountInString(k[i].key) > utf8.RuneCountInString(k[j].key)
+}
+
+func (k keywords) Swap(i, j int) {
+	k[i], k[j] = k[j], k[i]
+}
+
+var (
+	mutKey  sync.Mutex
+	kwdList keywords
+
+	mutKeyReplacer sync.RWMutex
+	keyReplacer1st *strings.Replacer
+	keyReplacer2nd *strings.Replacer
+)
+
 func initializeHandler(w http.ResponseWriter, r *http.Request) {
 	_, err := db.Exec(`DELETE FROM entry WHERE id > 7101`)
 	panicIf(err)
@@ -75,7 +106,65 @@ func initializeHandler(w http.ResponseWriter, r *http.Request) {
 	_, err = db.Exec("TRUNCATE star")
 	panicIf(err)
 
+	rows, err := db.Query("SELECT keyword FROM entry")
+	panicIf(err)
+
+	kws := make(keywords, 0, 1000)
+	for rows.Next() {
+		var k string
+		err := rows.Scan(&k)
+		panicIf(err)
+		kws = append(kws, Keyword{key: k, link: keywordLink(k)})
+	}
+	rows.Close()
+
+	InitKeyword(kws)
+
 	re.JSON(w, http.StatusOK, map[string]string{"result": "ok"})
+}
+func InitKeyword(kws keywords) {
+	mutKey.Lock()
+	kwdList = kws
+	sort.Sort(kwdList)
+
+	updateReplacer()
+	mutKey.Unlock()
+}
+
+func updateReplacer() {
+	reps1 := make([]string, 0, len(kwdList)*2)
+	reps2 := make([]string, 0, len(kwdList)*2)
+	for i, k := range kwdList {
+		if k.holder == "" {
+			k.holder = fmt.Sprintf("isuda_%x", sha1.Sum([]byte(k.key)))
+			kwdList[i].holder = k.holder
+		}
+
+		reps1 = append(reps1, k.key)
+		reps1 = append(reps1, k.holder)
+
+		reps2 = append(reps2, k.holder)
+		reps2 = append(reps2, k.link)
+	}
+	r1 := strings.NewReplacer(reps1...)
+	r2 := strings.NewReplacer(reps2...)
+	mutKeyReplacer.Lock()
+	keyReplacer1st = r1
+	keyReplacer2nd = r2
+	mutKeyReplacer.Unlock()
+}
+func keywordLink(k string) string {
+	ke := pathURIEscape(k)
+	return fmt.Sprintf(`<a href="http://%s/keywords/%s">%s</a>`, "127.0.0.1", ke)
+}
+func ReplaceKeyword(c string) string {
+	mutKeyReplacer.RLock()
+	r1 := keyReplacer1st
+	r2 := keyReplacer2nd
+	mutKeyReplacer.RUnlock()
+	x := r1.Replace(c)
+	x = html.EscapeString(x)
+	return r2.Replace(x)
 }
 
 func topHandler(w http.ResponseWriter, r *http.Request) {
@@ -168,9 +257,40 @@ func keywordPostHandler(w http.ResponseWriter, r *http.Request) {
 		author_id = ?, keyword = ?, description = ?, updated_at = NOW()
 	`, userID, keyword, description, userID, keyword, description)
 	panicIf(err)
+	AddKeyword(keyword, keywordLink(keyword))
 	http.Redirect(w, r, "/", http.StatusFound)
 }
+func AddKeyword(key, link string) {
+	k := Keyword{key: key, link: link}
 
+	mutKey.Lock()
+	kwdList = append(kwdList, k)
+	sort.Sort(kwdList)
+
+	updateReplacer()
+	mutKey.Unlock()
+}
+
+func RemoveKeyword(key string) {
+	mutKey.Lock()
+	var pos int = -1
+	for i, k := range kwdList {
+		if k.key == key {
+			pos = i
+			break
+		}
+	}
+	if pos < 0 {
+		log.Printf("keyword not found: %q", key)
+		return
+	}
+	kwdList[pos] = kwdList[len(kwdList)-1]
+	kwdList = kwdList[:len(kwdList)-1]
+	sort.Sort(kwdList)
+
+	updateReplacer()
+	mutKey.Unlock()
+}
 func loginHandler(w http.ResponseWriter, r *http.Request) {
 	if err := setName(w, r); err != nil {
 		forbidden(w)
@@ -347,6 +467,7 @@ func keywordByKeywordDeleteHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, err = db.Exec(`DELETE FROM entry WHERE keyword = ?`, keyword)
+	RemoveKeyword(keyword)
 	panicIf(err)
 	http.Redirect(w, r, "/", http.StatusFound)
 }
@@ -355,38 +476,7 @@ func htmlify(w http.ResponseWriter, r *http.Request, content string) string {
 	if content == "" {
 		return ""
 	}
-	rows, err := db.Query(`
-		SELECT * FROM entry ORDER BY CHARACTER_LENGTH(keyword) DESC
-	`)
-	panicIf(err)
-	entries := make([]*Entry, 0, 500)
-	for rows.Next() {
-		e := Entry{}
-		err := rows.Scan(&e.ID, &e.AuthorID, &e.Keyword, &e.Description, &e.UpdatedAt, &e.CreatedAt)
-		panicIf(err)
-		entries = append(entries, &e)
-	}
-	rows.Close()
-
-	kw2sha := make(map[string]string)
-	var replacerArgs []string
-	for _, entry := range entries {
-		kw := entry.Keyword
-		hash := "isuda_" + fmt.Sprintf("%x", sha1.Sum([]byte(kw)))
-		kw2sha[kw] = hash
-		replacerArgs = append(replacerArgs, kw, hash)
-	}
-
-	replacer := strings.NewReplacer(replacerArgs...)
-	content = replacer.Replace(content)
-
-	content = html.EscapeString(content)
-	for kw, hash := range kw2sha {
-		u, err := r.URL.Parse(baseUrl.String() + "/keyword/" + pathURIEscape(kw))
-		panicIf(err)
-		link := fmt.Sprintf("<a href=\"%s\">%s</a>", u, html.EscapeString(kw))
-		content = strings.Replace(content, hash, link, -1)
-	}
+	content = ReplaceKeyword(content)
 	return strings.Replace(content, "\n", "<br />\n", -1)
 }
 
