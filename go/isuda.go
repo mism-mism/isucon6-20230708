@@ -558,8 +558,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to connect to DB: %s.", err.Error())
 	}
-	db.SetMaxOpenConns(16)
-	db.SetMaxIdleConns(16)
+	db.SetMaxOpenConns(50)
+	db.SetMaxIdleConns(50)
 	db.Exec("SET SESSION sql_mode='TRADITIONAL,NO_AUTO_VALUE_ON_ZERO,ONLY_FULL_GROUP_BY'")
 	db.Exec("SET NAMES utf8mb4")
 
