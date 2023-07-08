@@ -73,6 +73,7 @@ func initializeHandler(w http.ResponseWriter, r *http.Request) {
 	panicIf(err)
 
 	_, err = db.Exec("TRUNCATE star")
+	panicIf(err)
 
 	re.JSON(w, http.StatusOK, map[string]string{"result": "ok"})
 }
@@ -299,11 +300,9 @@ func starsHandler(w http.ResponseWriter, r *http.Request) {
 
 func starsPostHandler(w http.ResponseWriter, r *http.Request) {
 	keyword := r.FormValue("keyword")
-	user := r.URL.Query().Get("user")
-
 	// 件数チェック
 	var keyCount int
-	err := db.QueryRow(`SELECT COUNT(*) FROM entry WHERE keyword = ?`, keyword).Scan(keyCount)
+	err := db.QueryRow(`SELECT COUNT(*) FROM entry WHERE keyword = ?`, keyword).Scan(&keyCount)
 	if err == sql.ErrNoRows {
 		notFound(w)
 		return
@@ -314,6 +313,7 @@ func starsPostHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// インサート
+	user := r.URL.Query().Get("user")
 	_, err = db.Exec(`INSERT INTO star (keyword, user_name, created_at) VALUES (?, ?, NOW())`, keyword, user)
 	panicIf(err)
 
@@ -457,6 +457,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to connect to DB: %s.", err.Error())
 	}
+	db.SetMaxOpenConns(16)
+	db.SetMaxIdleConns(16)
 	db.Exec("SET SESSION sql_mode='TRADITIONAL,NO_AUTO_VALUE_ON_ZERO,ONLY_FULL_GROUP_BY'")
 	db.Exec("SET NAMES utf8mb4")
 
