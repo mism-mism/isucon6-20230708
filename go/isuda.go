@@ -18,7 +18,6 @@ import (
 	"strings"
 
 	"github.com/Songmu/strrand"
-	"github.com/felixge/fgprof"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
@@ -94,7 +93,7 @@ func topHandler(w http.ResponseWriter, r *http.Request) {
 	page, _ := strconv.Atoi(p)
 
 	rows, err := db.Query(fmt.Sprintf(
-		"SELECT * FROM entry ORDER BY updated_at DESC LIMIT %d OFFSET %d",
+		"SELECT id, keyword, description, author_id FROM entry ORDER BY updated_at DESC LIMIT %d OFFSET %d",
 		perPage, perPage*(page-1),
 	))
 	if err != nil && err != sql.ErrNoRows {
@@ -255,7 +254,7 @@ func keywordByKeywordHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	keyword := mux.Vars(r)["keyword"]
-	row := db.QueryRow(`SELECT * FROM entry WHERE keyword = ?`, keyword)
+	row := db.QueryRow(`SELECT id, keyword, description, author_id FROM entry WHERE keyword = ?`, keyword)
 	e := Entry{}
 	err := row.Scan(&e.ID, &e.AuthorID, &e.Keyword, &e.Description, &e.UpdatedAt, &e.CreatedAt)
 	if err == sql.ErrNoRows {
@@ -292,7 +291,7 @@ func keywordByKeywordDeleteHandler(w http.ResponseWriter, r *http.Request) {
 		badRequest(w)
 		return
 	}
-	row := db.QueryRow(`SELECT * FROM entry WHERE keyword = ?`, keyword)
+	row := db.QueryRow(`SELECT id, keyword, description, author_id FROM entry WHERE keyword = ?`, keyword)
 	e := Entry{}
 	err := row.Scan(&e.ID, &e.AuthorID, &e.Keyword, &e.Description, &e.UpdatedAt, &e.CreatedAt)
 	if err == sql.ErrNoRows {
@@ -309,7 +308,7 @@ func htmlify(w http.ResponseWriter, r *http.Request, content string) string {
 		return ""
 	}
 	rows, err := db.Query(`
-		SELECT * FROM entry ORDER BY CHARACTER_LENGTH(keyword) DESC
+		SELECT id, keyword, description, author_id FROM entry ORDER BY keyword_length DESC limit 500
 	`)
 	panicIf(err)
 	entries := make([]*Entry, 0, 500)
@@ -392,10 +391,6 @@ func getSession(w http.ResponseWriter, r *http.Request) *sessions.Session {
 }
 
 func main() {
-	http.DefaultServeMux.Handle("/debug/fgprof", fgprof.Handler())
-	go func() {
-		log.Println(http.ListenAndServe(":6061", nil))
-	}()
 	host := os.Getenv("ISUDA_DB_HOST")
 	if host == "" {
 		host = "localhost"
