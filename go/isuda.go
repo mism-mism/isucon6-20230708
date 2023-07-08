@@ -122,6 +122,7 @@ func initializeHandler(w http.ResponseWriter, r *http.Request) {
 
 	re.JSON(w, http.StatusOK, map[string]string{"result": "ok"})
 }
+
 func InitKeyword(kws keywords) {
 	mutKey.Lock()
 	kwdList = kws
@@ -155,7 +156,7 @@ func updateReplacer() {
 }
 func keywordLink(k string) string {
 	ke := pathURIEscape(k)
-	return fmt.Sprintf(`<a href="http://%s/keywords/%s">%s</a>`, "127.0.0.1", ke)
+	return fmt.Sprintf(`<a href="http://%s/keywords/%s">%s</a>`, "18.176.57.48", ke)
 }
 func ReplaceKeyword(c string) string {
 	mutKeyReplacer.RLock()
