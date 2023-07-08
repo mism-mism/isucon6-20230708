@@ -14,8 +14,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
+	"unicode/utf8"
 
 	"github.com/Songmu/strrand"
 	"github.com/felixge/fgprof"
@@ -75,6 +79,7 @@ func initializeHandler(w http.ResponseWriter, r *http.Request) {
 	_, err = db.Exec("TRUNCATE star")
 	panicIf(err)
 
+	startup()
 	re.JSON(w, http.StatusOK, map[string]string{"result": "ok"})
 }
 
@@ -168,7 +173,14 @@ func keywordPostHandler(w http.ResponseWriter, r *http.Request) {
 		author_id = ?, keyword = ?, description = ?, updated_at = NOW()
 	`, userID, keyword, description, userID, keyword, description)
 	panicIf(err)
+
+	addKeyword(keyword, keywordLink(keyword))
 	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+func keywordLink(k string) string {
+	ke := pathURIEscape(k)
+	return fmt.Sprintf(`<a href="http://%s/keyword/%s">%s</a>`, baseUrl.Host, ke, ke)
 }
 
 func loginHandler(w http.ResponseWriter, r *http.Request) {
@@ -348,43 +360,150 @@ func keywordByKeywordDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	_, err = db.Exec(`DELETE FROM entry WHERE keyword = ?`, keyword)
 	panicIf(err)
+
+	removeKeyword(keyword)
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
+type Keyword struct {
+	Key    string
+	Link   string
+	holder string
+}
+
+type KeywordArray []Keyword
+
+var (
+	mKwControl                   sync.Mutex
+	kwdList                      KeywordArray
+	mKwReplacer                  sync.RWMutex
+	kwReplacer1st, kwReplacer2nd *strings.Replacer
+
+	mUpdateReplacer sync.Mutex
+	repLastUpdated  time.Time
+)
+
+func startup() {
+	rows, err := db.Query("SELECT keyword FROM entry")
+	panicIf(err)
+
+	kws := make(KeywordArray, 0, 1000)
+	for rows.Next() {
+		var k string
+		err := rows.Scan(&k)
+		panicIf(err)
+		kws = append(kws, Keyword{Key: k, Link: keywordLink(k)})
+	}
+	rows.Close()
+
+	initKeyword(kws)
+}
+
+func updateReplacer() {
+	now := time.Now()
+	mUpdateReplacer.Lock()
+	defer mUpdateReplacer.Unlock()
+
+	if repLastUpdated.After(now) {
+		return
+	}
+	repLastUpdated = time.Now()
+
+	reps1 := make([]string, 0, len(kwdList)*2)
+	reps2 := make([]string, 0, len(kwdList)*2)
+
+	mKwControl.Lock()
+	kws := kwdList[:]
+	mKwControl.Unlock()
+	sort.Sort(kws)
+	for i, k := range kwdList {
+		if k.holder == "" {
+			k.holder = fmt.Sprintf("isuda_%x", sha1.Sum([]byte(k.Key)))
+			kwdList[i].holder = k.holder
+		}
+
+		reps1 = append(reps1, k.Key)
+		reps1 = append(reps1, k.holder)
+		reps2 = append(reps2, k.holder)
+		reps2 = append(reps2, k.Link)
+	}
+
+	r1 := strings.NewReplacer(reps1...)
+	r2 := strings.NewReplacer(reps2...)
+	mKwReplacer.Lock()
+	kwReplacer1st = r1
+	kwReplacer2nd = r2
+	mKwReplacer.Unlock()
+
+}
+
+func addKeyword(key, link string) {
+	k := Keyword{Key: key, Link: link}
+	mKwControl.Lock()
+	kwdList = append(kwdList, k)
+	sort.Sort(kwdList)
+	mKwControl.Unlock()
+	updateReplacer()
+}
+
+func removeKeyword(key string) {
+	mKwControl.Lock()
+	var pos int = -1
+	for i, k := range kwdList {
+		if k.Key == key {
+			pos = i
+			break
+		}
+	}
+	if pos < 0 {
+		log.Printf("keyword not found: %q", key)
+		return
+	}
+
+	kwdList[pos] = kwdList[len(kwdList)-1]
+	kwdList = kwdList[:len(kwdList)-1]
+	sort.Sort(kwdList)
+	mKwControl.Unlock()
+	updateReplacer()
+}
+
+func initKeyword(kws KeywordArray) {
+	mKwControl.Lock()
+	kwdList = kws
+	sort.Sort(kwdList)
+	mKwControl.Unlock()
+	updateReplacer()
+}
+
+func replaceKeyword(c string) string {
+	mKwReplacer.RLock()
+	r1 := kwReplacer1st
+	r2 := kwReplacer2nd
+	mKwReplacer.RUnlock()
+	x := r1.Replace(c)
+	x = html.EscapeString(x)
+	return r2.Replace(x)
+
+}
+
+var _ sort.Interface = KeywordArray{}
+
+func (ks KeywordArray) Len() int {
+	return len(ks)
+}
+func (ks KeywordArray) Less(i, j int) bool {
+	return utf8.RuneCountInString(ks[i].Key) > utf8.RuneCountInString(ks[j].Key)
+}
+
+func (ks KeywordArray) Swap(i, j int) {
+	ks[i], ks[j] = ks[j], ks[i]
+}
 func htmlify(w http.ResponseWriter, r *http.Request, content string) string {
 	if content == "" {
 		return ""
 	}
-	rows, err := db.Query("SELECT id, author_id, `keyword`, description, updated_at, created_at FROM entry ORDER BY keyword_length DESC")
-	panicIf(err)
-	entries := make([]*Entry, 0, 500)
-	for rows.Next() {
-		e := Entry{}
-		err := rows.Scan(&e.ID, &e.AuthorID, &e.Keyword, &e.Description, &e.UpdatedAt, &e.CreatedAt)
-		panicIf(err)
-		entries = append(entries, &e)
-	}
-	rows.Close()
 
-	kw2sha := make(map[string]string)
-	var replacerArgs []string
-	for _, entry := range entries {
-		kw := entry.Keyword
-		hash := "isuda_" + fmt.Sprintf("%x", sha1.Sum([]byte(kw)))
-		kw2sha[kw] = hash
-		replacerArgs = append(replacerArgs, kw, hash)
-	}
-
-	replacer := strings.NewReplacer(replacerArgs...)
-	content = replacer.Replace(content)
-
-	content = html.EscapeString(content)
-	for kw, hash := range kw2sha {
-		u, err := r.URL.Parse(baseUrl.String() + "/keyword/" + pathURIEscape(kw))
-		panicIf(err)
-		link := fmt.Sprintf("<a href=\"%s\">%s</a>", u, html.EscapeString(kw))
-		content = strings.Replace(content, hash, link, -1)
-	}
+	content = replaceKeyword(content)
 	return strings.Replace(content, "\n", "<br />\n", -1)
 }
 
@@ -456,8 +575,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to connect to DB: %s.", err.Error())
 	}
-	db.SetMaxOpenConns(16)
-	db.SetMaxIdleConns(16)
+	db.SetMaxOpenConns(50)
+	db.SetMaxIdleConns(50)
 	db.Exec("SET SESSION sql_mode='TRADITIONAL,NO_AUTO_VALUE_ON_ZERO,ONLY_FULL_GROUP_BY'")
 	db.Exec("SET NAMES utf8mb4")
 
