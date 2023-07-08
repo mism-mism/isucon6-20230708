@@ -179,7 +179,7 @@ func keywordPostHandler(w http.ResponseWriter, r *http.Request) {
 
 func keywordLink(k string) string {
 	ke := pathURIEscape(k)
-	return fmt.Sprintf(`<a href="http://%s/keywords/%s">%s</a>`, baseUrl.Host, ke, ke)
+	return fmt.Sprintf(`<a href="http://%s/keywo	/%s">%s</a>`, baseUrl.Host, ke, ke)
 }
 
 func loginHandler(w http.ResponseWriter, r *http.Request) {
