@@ -30,7 +30,6 @@ const (
 )
 
 var (
-	isutarEndpoint string
 	isupamEndpoint string
 
 	baseUrl *url.URL
@@ -72,9 +71,8 @@ func initializeHandler(w http.ResponseWriter, r *http.Request) {
 	_, err := db.Exec(`DELETE FROM entry WHERE id > 7101`)
 	panicIf(err)
 
-	resp, err := http.Get(fmt.Sprintf("%s/initialize", isutarEndpoint))
+	_, err = db.Exec("TRUNCATE star")
 	panicIf(err)
-	defer resp.Body.Close()
 
 	re.JSON(w, http.StatusOK, map[string]string{"result": "ok"})
 }
@@ -272,6 +270,55 @@ func keywordByKeywordHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func loadStars(keyword string) []*Star {
+	rows, err := db.Query(`SELECT * FROM star WHERE keyword = ?`, keyword)
+	if err != nil && err != sql.ErrNoRows {
+		panicIf(err)
+		return nil
+	}
+
+	stars := make([]*Star, 0, 10)
+	for rows.Next() {
+		s := Star{}
+		err := rows.Scan(&s.ID, &s.Keyword, &s.UserName, &s.CreatedAt)
+		panicIf(err)
+		stars = append(stars, &s)
+	}
+	rows.Close()
+	return stars
+}
+func starsHandler(w http.ResponseWriter, r *http.Request) {
+	keyword := r.FormValue("keyword")
+
+	stars := loadStars(keyword)
+
+	re.JSON(w, http.StatusOK, map[string][]*Star{
+		"result": stars,
+	})
+}
+
+func starsPostHandler(w http.ResponseWriter, r *http.Request) {
+	keyword := r.FormValue("keyword")
+	// 件数チェック
+	var keyCount int
+	err := db.QueryRow(`SELECT COUNT(*) FROM entry WHERE keyword = ?`, keyword).Scan(&keyCount)
+	if err == sql.ErrNoRows {
+		notFound(w)
+		return
+	}
+	if keyCount == 0 {
+		notFound(w)
+		return
+	}
+
+	// インサート
+	user := r.URL.Query().Get("user")
+	_, err = db.Exec(`INSERT INTO star (keyword, user_name, created_at) VALUES (?, ?, NOW())`, keyword, user)
+	panicIf(err)
+
+	re.JSON(w, http.StatusOK, map[string]string{"result": "ok"})
+}
+
 func keywordByKeywordDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	if err := setName(w, r); err != nil {
 		forbidden(w)
@@ -342,21 +389,6 @@ func htmlify(w http.ResponseWriter, r *http.Request, content string) string {
 	return strings.Replace(content, "\n", "<br />\n", -1)
 }
 
-func loadStars(keyword string) []*Star {
-	v := url.Values{}
-	v.Set("keyword", keyword)
-	resp, err := http.Get(fmt.Sprintf("%s/stars", isutarEndpoint) + "?" + v.Encode())
-	panicIf(err)
-	defer resp.Body.Close()
-
-	var data struct {
-		Result []*Star `json:result`
-	}
-	err = json.NewDecoder(resp.Body).Decode(&data)
-	panicIf(err)
-	return data.Result
-}
-
 func isSpamContents(content string) bool {
 	v := url.Values{}
 	v.Set("content", content)
@@ -420,13 +452,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to connect to DB: %s.", err.Error())
 	}
+	db.SetMaxOpenConns(16)
+	db.SetMaxIdleConns(16)
 	db.Exec("SET SESSION sql_mode='TRADITIONAL,NO_AUTO_VALUE_ON_ZERO,ONLY_FULL_GROUP_BY'")
 	db.Exec("SET NAMES utf8mb4")
 
-	isutarEndpoint = os.Getenv("ISUTAR_ORIGIN")
-	if isutarEndpoint == "" {
-		isutarEndpoint = "http://localhost:5001"
-	}
 	isupamEndpoint = os.Getenv("ISUPAM_ORIGIN")
 	if isupamEndpoint == "" {
 		isupamEndpoint = "http://localhost:5050"
@@ -474,6 +504,11 @@ func main() {
 	k := r.PathPrefix("/keyword/{keyword}").Subrouter()
 	k.Methods("GET").HandlerFunc(myHandler(keywordByKeywordHandler))
 	k.Methods("POST").HandlerFunc(myHandler(keywordByKeywordDeleteHandler))
+
+	// star
+	s := r.PathPrefix("/stars").Subrouter()
+	s.Methods("GET").HandlerFunc(myHandler(starsHandler))
+	s.Methods("POST").HandlerFunc(myHandler(starsPostHandler))
 
 	r.PathPrefix("/").Handler(http.FileServer(http.Dir("./public/")))
 	log.Fatal(http.ListenAndServe(":5000", r))
