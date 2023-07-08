@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/felixge/fgprof"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/mux"
 	"github.com/unrolled/render"
@@ -73,6 +74,10 @@ func starsPostHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	http.DefaultServeMux.Handle("/debug/fgprof", fgprof.Handler())
+	go func() {
+		log.Println(http.ListenAndServe(":6060", nil))
+	}()
 	host := os.Getenv("ISUTAR_DB_HOST")
 	if host == "" {
 		host = "localhost"
