@@ -4,7 +4,6 @@ gogo: stop-services build truncate-logs start-services bench
 
 stop-services:
 	sudo systemctl stop nginx
-	sudo systemctl stop isutar.go.service
 	sudo systemctl stop isuda.go.service
 	sudo systemctl stop mysql.service
 
@@ -19,7 +18,6 @@ truncate-logs:
 
 start-services:
 	sudo systemctl start mysql.service
-	sudo systemctl start isutar.go.service
 	sudo systemctl start isuda.go.service
 	sudo systemctl start nginx
 
