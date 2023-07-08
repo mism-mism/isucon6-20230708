@@ -252,7 +252,7 @@ func keywordByKeywordHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	keyword := mux.Vars(r)["keyword"]
-	row := db.QueryRow(`SELECT id, author_id, \`keyword\`, description, updated_at, created_at FROM entry WHERE keyword = ?`, keyword)
+	row := db.QueryRow("SELECT id, author_id, `keyword`, description, updated_at, created_at FROM entry WHERE keyword = ?", keyword)
 	e := Entry{}
 	err := row.Scan(&e.ID, &e.AuthorID, &e.Keyword, &e.Description, &e.UpdatedAt, &e.CreatedAt)
 	if err == sql.ErrNoRows {
@@ -338,7 +338,7 @@ func keywordByKeywordDeleteHandler(w http.ResponseWriter, r *http.Request) {
 		badRequest(w)
 		return
 	}
-	row := db.QueryRow(`SELECT id, author_id, \`keyword\`, description, updated_at, created_at FROM entry WHERE keyword = ?`, keyword)
+	row := db.QueryRow("SELECT id, author_id, `keyword`, description, updated_at, created_at FROM entry WHERE keyword = ?", keyword)
 	e := Entry{}
 	err := row.Scan(&e.ID, &e.AuthorID, &e.Keyword, &e.Description, &e.UpdatedAt, &e.CreatedAt)
 	if err == sql.ErrNoRows {
@@ -354,9 +354,7 @@ func htmlify(w http.ResponseWriter, r *http.Request, content string) string {
 	if content == "" {
 		return ""
 	}
-	rows, err := db.Query(`
-		SELECT id, author_id, \`keyword\`, description, updated_at, created_at FROM entry ORDER BY CHARACTER_LENGTH(keyword) DESC limit 500
-	`)
+	rows, err := db.Query("SELECT id, author_id, `keyword`, description, updated_at, created_at FROM entry ORDER BY CHARACTER_LENGTH(keyword) DESC limit 500")
 	panicIf(err)
 	entries := make([]*Entry, 0, 500)
 	for rows.Next() {
